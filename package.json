@@ -1,0 +1,38 @@
+{
+  "name": "vortex",
+  "version": "1.0.0",
+  "description": "Vortex Cloud Debugger - Debug Client Sample",
+  "author": "Bitvisory, Inc.",
+  "private": true,
+  "scripts": {
+    "start": "node start.js",
+    "build": "pkg ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vortex-cloud-debugger/debug-client.git"
+  },
+  "main": "start.js",
+  "keywords": [
+    "vortex",
+    "debugger",
+    "shell",
+    "client"
+  ],
+  "dependencies": {
+    "colors": "^1.4.0",
+    "commander": "^6.2.0",
+    "http": "0.0.0",
+    "prompt": "^1.0.0",
+    "querystring": "^0.2.0",
+    "speakeasy": "^2.0.0",
+    "unirest": "^0.6.0",
+    "uuid": "^3.4.0"
+  },
+  "pkg": {
+    "targets": [
+      "node13", "linux", "macos", "win"
+    ]
+  },
+  "bin": "vortex.js"
+}
