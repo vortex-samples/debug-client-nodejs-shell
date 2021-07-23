@@ -13,6 +13,7 @@ function log(str) {
     if (this._log) this._log(str);
     else console.log(str);
 }
+
 // assemble the data from the node express request object
 function assemble(interception, success, failure, res) {
     try {
@@ -42,7 +43,10 @@ function assemble(interception, success, failure, res) {
         failure(interception);
     }
 }
+
+// perform the request replay
 function request(interception, params) {
+
     return new Promise(function (success, failure) {
         try {
             const thisUrl = url.parse(interception.input.url);
@@ -50,6 +54,9 @@ function request(interception, params) {
             const host = params.host;
             const port = params.port;
             const path = decodeURIComponent(thisUrl.path);
+            const interceptionVerb = interception.input.method.toLowerCase();
+
+            //build journal output
             interception.output = {
                 status: -1,
                 headers: {},
@@ -60,103 +67,50 @@ function request(interception, params) {
                 msg: '',
                 code: -1
             }
-            switch (interception.input.method.toLowerCase()) {
+
+            // build request options
+            let replayOpts = {
+                host: host,
+                port: port,
+                path: path,
+                method: interceptionVerb.toUpperCase(),
+                headers: interception.input.headers
+            };
+
+            // make sure that the interception verb is one we support
+            switch (interceptionVerb) {
                 case 'get':
-                    var opts = {
-                        host: host,
-                        port: port,
-                        path: path,
-                        method: 'GET',
-                        headers: interception.input.headers
-                    };
-                    log('get: '.green + params.provider + '://' + host + ':' + port + opts.path);
-                    var splitAt = opts.path.indexOf('?');
-                    if (splitAt >= 0) {
-                        var qs = opts.path.substring(splitAt + 1).split(' ').join('+');
-                        opts.path = opts.path.substring(0, splitAt).split(' ').join('%20') + '?' + qs;
-                    } else {
-                        opts.path = opts.path.split(' ').join('%20');
-                    }
-                    var reqGet = provider.request(opts, function (res) {
-                        assemble(interception, success, failure, res);
-                    });
-                    reqGet.end();
-                    reqGet.on('error', function (e) {
-                        log('error: '.red + params.provider + '://' + host + ':' + port + opts.path);
-                        switch (e.code) {
-                            case 'ECONNREFUSED':
-                                interception.output.code = 9100;
-                                interception.output.msg = 'Connection Refused'
-                                failure(interception);
-                                break;
-                            default:
-                                interception.output.code = 9199;
-                                interception.output.msg = e.code;
-                                failure(interception);
-                                break;
-                        }
-                    });
-                    break;
                 case 'post':
-                    var input = interception.input.body || '';
-                    var opts = {
-                        host: host,
-                        port: port,
-                        path: path,
-                        method: 'POST',
-                        headers: interception.input.headers
-                    };
-                    var splitAt = opts.path.indexOf('?');
-                    if (splitAt >= 0) {
-                        var qs = opts.path.substring(splitAt + 1).split(' ').join('+');
-                        opts.path = opts.path.substring(0, splitAt).split(' ').join('%20') + '?' + qs;
-                    } else {
-                        opts.path = opts.path.split(' ').join('%20');
-                    }
-                    log('post: '.green + params.provider + '://' + host + ':' + port + opts.path);
-                    var reqPost = provider.request(opts, function (res) {
-                        assemble(interception, success, failure, res);
-                    });
-                    if (typeof input !== 'object') reqPost.write(input);
-                    reqPost.end();
-                    reqPost.on('error', function (e) {
-                        error('error: '.red + params.provider + '://' + host + ':' + port + opts.path);
-                        switch (e.code) {
-                            case 'ECONNREFUSED':
-                                interception.output.code = 9100;
-                                interception.output.msg = 'Connection Refused';
-                                failure(interception);
-                                break;
-                            default:
-                                interception.output.code = 9199;
-                                interception.output.msg = e.code;
-                                failure(interception);
-                                break;
-                        }
-                    });
-                    break;
                 case 'delete':
-                    var opts = {
-                        host: host,
-                        port: port,
-                        path: path,
-                        method: 'DELETE',
-                        headers: interception.input.headers
-                    };
-                    var splitAt = opts.path.indexOf('?');
+                case 'patch':
+                case 'put':
+                    let input = interception.input.body || '';
+
+                    // parse the request path to build the replayOpts object used for replay
+                    let splitAt = replayOpts.path.indexOf('?');
                     if (splitAt >= 0) {
-                        var qs = opts.path.substring(splitAt + 1).split(' ').join('+');
-                        opts.path = opts.path.substring(0, splitAt).split(' ').join('%20') + '?' + qs;
+                        let qs = replayOpts.path.substring(splitAt + 1).split(' ').join('+');
+                        replayOpts.path = replayOpts.path.substring(0, splitAt).split(' ').join('%20') + '?' + qs;
                     } else {
-                        opts.path = opts.path.split(' ').join('%20');
+                        replayOpts.path = replayOpts.path.split(' ').join('%20');
                     }
-                    log('delete: '.green + params.provider + '://' + host + ':' + port + opts.path);
-                    var reqDelete = provider.request(opts, function (res) {
+
+                    log(interceptionVerb.green + ' ' + params.provider + '://' + host + ':' + port + replayOpts.path);
+
+                    // perform the replay request
+                    let replayRequest = provider.request(replayOpts, function (res) {
                         assemble(interception, success, failure, res);
                     });
-                    reqDelete.end();
-                    reqDelete.on('error', function (e) {
-                        error('error: '.red + params.provider + '://' + host + ':' + port + opts.path);
+
+                    // if there is data input (e.g. body data) then send it only if it isn't a get verb
+                    if ( interceptionVerb !== 'get' && typeof input !== 'object') replayRequest.write(input);
+
+                    // end the request
+                    replayRequest.end();
+
+                    // request on handler for an error
+                    replayRequest.on('error', function (e) {
+                        error('error: '.red + interceptionVerb + ' ' + params.provider + '://' + host + ':' + port + replayOpts.path);
                         switch (e.code) {
                             case 'ECONNREFUSED':
                                 interception.output.code = 9100;
@@ -171,8 +125,10 @@ function request(interception, params) {
                         }
                     });
                     break;
+
+                // default behavior is to not support the unknown verb type
                 default:
-                    log('not supported: '.red + interception.input.method.toLowerCase() + ' ' + params.provider + '://' + host + ':' + port + opts.path);
+                    log('not supported: '.red + interceptionVerb + ' ' + params.provider + '://' + host + ':' + port + replayOpts.path);
                     interception.output.code = 9000;
                     interception.output.msg = 'Method Not Allowed';
                     failure(interception);

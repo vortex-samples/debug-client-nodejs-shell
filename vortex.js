@@ -17,7 +17,9 @@
  * 4. The resulting HTTP status and data will be updated and its journal status set to reply so it is not processed again.
  */
 
-const VERSION = '1.1.4',
+let dateTime = function (){ return Date().split('GM')[0]; }
+
+const VERSION = '1.1.7',
     ASK_FOR_SITE = 'select site',
     ASK_FOR_HOST = 'select host',
     ASK_FOR_PORT = 'select port',
@@ -25,9 +27,7 @@ const VERSION = '1.1.4',
     ASK_OLD_PIN = 'old pin',
     ASK_NEW_PIN = 'new pin',
     ASK_NEW_VERSION = 'new version',
-    ASK_CREDENTIALS = 'credentials',
-    ENV_LAB = 'lab',
-    ENV_LOCAL = 'local';
+    ASK_CREDENTIALS = 'credentials';
 
 function myParseInt(value, dummyPrevious) {
     return parseInt(value);
@@ -82,7 +82,7 @@ replay.onLog(function(what) {
 // When there are interceptions, it will immediately use the minimum polling interval
 var POLLING_INTERVAL = 50;                  // initial start value of 50ms
 var POLLING_FAULT = false;                  // indicates if a polling fault happened
-//sliding range for polling interval. 
+//sliding range for polling interval.
 const POLLING_INTERVAL_MIN = 50             // no sooner than this value in ms
 const POLLING_INTERVAL_MAX = 2000           // no later than this value in ms
 const POLLING_INTERVAL_STEP = 50            // add this much to the delay when there are no interceptions
@@ -97,11 +97,14 @@ var params = new commander.Command()  // setup the params syntax
     .option('--host <host>', 'Local forward host', myParseHost,)
     .option('--port <port>', 'Local forward port', myParseInt,)
     .option('--provider <provider>', 'Local debug provider', myParseProvider)
-    .option('--env <env>', 'Environment')
+    .option('--env <env>', 'Environment for Vortex Hub development purposes')
     .option('-d, --defaultlocal', 'Skip prompts, use default http://127.0.0.1:8080')
     .option('--save', 'Save sign in with PIN code')
     .option('-s, --site <site>', 'Site to debug')
     .option('--verifytls', "Verify forwarding host's certificate (not required for local dev)")
+    .option('--email <email>', 'Account email address')
+    .option('--password <password>', 'Account password')
+    .option('--appliance <url>', 'URL to a Vortex Hub appliance, e.g. https://vtxappliance.yourcompany.com');
 
 /****
  * Graceful shutdown for the app
@@ -119,7 +122,7 @@ function exit(exitCode) {
  */
 function say(what, shutdown, writer) {
     if (!writer) writer = console.log;
-    
+
     what = what || ''; // sanity check
     switch (what) {
         case ASK_NEW_VERSION:
@@ -129,7 +132,7 @@ function say(what, shutdown, writer) {
             writer('*'.green + '  LATEST:  ' + _this.VERSION_LATEST + '                               ' + '*'.green)
             writer('*************************************************'.green)
             writer('')
-            writer('Download the latest version at ' + _this.VORTEX_WWW_SERVER + '/download/latest')
+            writer('Download the latest version at ' + _this.VORTEX_WWW_SERVER + '/#/app/expose')
             writer('')
             break;
         // detailed status information
@@ -179,24 +182,48 @@ function configure() {
     // default to not not verifying forwarding host's cert (default to dev env)
     if (!params.enabletls) params.enabletls = false;
 
-    params.env = !params.env ? '' : params.env.toLowerCase();
 
-    switch (params.env) {
-        case ENV_LAB:
-            _this.VORTEX_USER_SPACE = '.lab.vtxhub.com';
-            _this.VORTEX_API_SERVER = 'https://lab.vtxhub.com/v1';
-            _this.VORTEX_WWW_SERVER = 'https://lab.vtxhub.com';
-            break;
-        case ENV_LOCAL:
-            _this.VORTEX_USER_SPACE = '.local';
-            _this.VORTEX_API_SERVER = 'http://localhost:8081/v1';
-            _this.VORTEX_WWW_SERVER = 'http://localhost:8080';
-            break;
-        default:
-            _this.VORTEX_USER_SPACE = '.app.vtxhub.com';
-            _this.VORTEX_API_SERVER = 'https://api.vtxhub.com/v1';
-            _this.VORTEX_WWW_SERVER = 'https://www.vtxhub.com';
-            break;
+    //standardize appliance parameter if it exists
+    params.appliance = !params.appliance ?'':params.appliance.toLowerCase();
+
+    //if there isn't an appliance passed then default to the cloud service or development environment
+    if (!params.appliance) {
+        params.env = !params.env ? '' : params.env.toLowerCase();
+
+        //use development or production values by default
+        switch (params.env) {
+            case 'local':
+                console.log("Using ENV:" + params.env);
+                _this.VORTEX_API_SERVER = 'http://localhost:8081/v1';
+                _this.VORTEX_WWW_SERVER = 'http://localhost:8080';
+                break;
+            case 'devbox':
+                console.log("Using ENV:" + params.env);
+                _this.VORTEX_API_SERVER = 'http://www.vortexhub.vtx/v1';
+                _this.VORTEX_WWW_SERVER = 'http://www.vortexhub.vtx';
+                break;
+            default:
+                _this.VORTEX_API_SERVER = 'https://api.vtxhub.com/v1';
+                _this.VORTEX_WWW_SERVER = 'https://www.vtxhub.com';
+                break;
+        }
+    }else{
+        //use the vortex hub appliance value if passed
+        if (params.appliance.startsWith('http://') || params.appliance.startsWith('https://')){
+            console.log("Using Appliance: " + params.appliance);
+            _this.VORTEX_WWW_SERVER = params.appliance;
+
+            //if cloud service connection then api path is not like the typical appliance
+            if (params.appliance === 'https://www.vtxhub.com'){
+                _this.VORTEX_API_SERVER = 'https://api.vtxhub.com/v1';
+            }else {
+                //appliance API is the url with /v1
+                _this.VORTEX_API_SERVER = params.appliance + '/v1';
+            }
+        }else{
+            console.log("Appliance must start with http:// or https://")
+            process.exit(1);
+        }
     }
 }
 
@@ -207,6 +234,26 @@ function askIfMissing(what, override) {
     return new Promise(function (success, failure) {
         switch (what) {
             case ASK_FOR_SITE:
+                if(params.site) {
+
+                    // user didn't pass in a FQDN for the site so build the FQDN
+                    if(!String(params.site).includes(".")) { 
+                        if (_this.VORTEX_WWW_SERVER === 'https://www.vtxhub.com') {
+                            params.site += ".app.vtxhub.com"; // cloud service instant domains starts with app.vtxhub.com
+                        }else if (_this.VORTEX_WWW_SERVER.includes('www.vortexhub.vtx')){
+                            params.site += ".app.vortexhub.vtx"; // vortex development environment
+                        }else{
+                            params.site += '.' + _this.VORTEX_WWW_SERVER.split('://')[1]; // append the the site with the url
+                        }
+                    }
+
+                    //make sure the user passed in a site that exists in their account
+                    if(!_this.VORTEX_USER_WEBAPPS.find(s => s.host === params.site)) {
+                        say(`Site not found in Vortex Hub: ${params.site}`);
+                        failure;
+                    }
+                }
+
                 if (params.site && !override) {
                     api.webapp(params.site).then(function (valid_site) {
                         params.site = valid_site.host;
@@ -223,6 +270,7 @@ function askIfMissing(what, override) {
                 }
                 break;
             case ASK_FOR_HOST:
+
                 params.host && !override ? success(params.host) : ask(what, function (value) {
                     if (!value) value = override || '127.0.0.1';
                     success(value);
@@ -312,9 +360,15 @@ function main() {
     portal.connect(_this.VORTEX_WWW_SERVER).then(
         function (settings) {
             _this.VERSION_LATEST = settings.ver;
-            if (_this.VERSION_LATEST !== VERSION) {
+
+            //check to see if there is a newer version than the current version
+            let compareVer = require('semver-compare');
+
+            //if there is a newer version then inform the user
+            if (compareVer(_this.VERSION_LATEST, VERSION) > 0) {
                 say(ASK_NEW_VERSION, false);
             }
+
             api.connect(_this.VORTEX_API_SERVER).then(
                 function () {
                     fs.access((params.env ? '-' + params.env : '') + secure, fs.F_OK, (err) => {
@@ -405,7 +459,7 @@ function poll() {
     if (!_this.paused) {
         api.poll(params).then(
             function (interceptions) {
-                if (POLLING_FAULT) say('success: '.green + 'Vortex connection restored');
+                if (POLLING_FAULT) say(dateTime() + 'success: '.green + 'Vortex connection restored');
                 POLLING_FAULT = false;
 
                 var acks = [];
@@ -434,8 +488,8 @@ function poll() {
             },
             function (fault, response) {
                 if (!POLLING_FAULT) {
-                    say(' ')
-                    say('error: '.red + 'Vortex connection failed, retrying...');
+                    say(' ');
+                    say(dateTime() + 'error: '.red + 'Vortex connection failed, retrying...');
                 }
                 POLLING_FAULT = true;
                 //increment the polling interval more substantially 
@@ -487,11 +541,17 @@ function ask(what, callback) {
             });
             break;
         case ASK_CREDENTIALS:
-            const prompt_basic_credential = {
+            // If there are command line arguments for username and password
+            // then don't bother asking, just try them. If there aren't, prompt.
+            let grant;
+            let prompt_basic_credential;
+            let prompt_mfa_credential;
+            prompt_basic_credential = {
+
                 properties: {
                     name: {
                         description: '\n\r' + 'Email address:'.cyan,
-                        pattern: /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
+                        pattern: /(^[^\s@]+@[^\s@]+\.[^\s@]{2,}$)$/,
                         message: 'Email provided is not valid!'.red,
                         required: true
                     },
@@ -502,7 +562,7 @@ function ask(what, callback) {
                     }
                 }
             };
-            const prompt_mfa_credential = {
+            prompt_mfa_credential = {
                 properties: {
                     code: {
                         description: '\n\r' + 'Google Authenticator Code:'.cyan,
@@ -512,26 +572,53 @@ function ask(what, callback) {
                     }
                 }
             };
-            prompt.get(prompt_basic_credential, function (err, result) {
-                if (result) {
-                    const grant = {
-                        grant_type: 'password_grant',
-                        username: result.name,
-                        password: result.password
-                    };
-                    api.authorize(grant).then(function (token) {
-                        if (token && token.grant_type === 'mfa') {
-                            prompt.get(prompt_mfa_credential, function (err, code) {
-                                token.client_secret = code.code;
-                                api.authorize(token).then(callback, exit);
-                            });
-                        } else {
-                            callback(token);
-                        }
-                    }, exit);
-                }
-            });
+
+            if(params.email && params.password) {
+                grant = {
+                    grant_type: 'password_grant',
+                    username: params.email,
+                    password: params.password
+                };
+
+                api.authorize(grant).then(function (token) {
+                    if (token && token.grant_type === 'mfa') {
+                        prompt.get(prompt_mfa_credential, function (err, code) {
+                            token.client_secret = code.code;
+                            api.authorize(token).then(callback, exit);
+                        });
+                    } else {
+                        callback(token);
+                    }
+                }, exit);
+
+            } else {
+
+                prompt.get(prompt_basic_credential, function (err, result) {
+                    if (result) {
+
+                        grant = {
+                            grant_type: 'password_grant',
+                            username: result.name,
+                            password: result.password
+                        };
+
+                        api.authorize(grant).then(function (token) {
+                            if (token && token.grant_type === 'mfa') {
+                                prompt.get(prompt_mfa_credential, function (err, code) {
+                                    token.client_secret = code.code;
+                                    api.authorize(token).then(callback, exit);
+                                });
+                            } else {
+                                callback(token);
+                            }
+                        }, exit);
+                    }
+                });
+
+            }
+
             break;
+
         case ASK_FOR_SITE:
             defaultValue = params.site || _this.VORTEX_USER_WEBAPPS[0].host;
             const select_webapp = {

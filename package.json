@@ -25,13 +25,17 @@
     "http": "0.0.0",
     "prompt": "^1.0.0",
     "querystring": "^0.2.0",
+    "semver-compare": "^1.0.0",
     "speakeasy": "^2.0.0",
     "unirest": "^0.6.0",
     "uuid": "^3.4.0"
   },
   "pkg": {
     "targets": [
-      "node13", "linux", "macos", "win"
+      "node13",
+      "linux",
+      "macos",
+      "win"
     ]
   },
   "bin": "vortex.js"
